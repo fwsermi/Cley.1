@@ -1,207 +1,452 @@
+import os
 import sqlite3
 import time
-import os
 
-# =========================
+
+# =========================================================
 # DATABASE
-# =========================
+# =========================================================
 
-DB_FILE = "cleydo.db"
+DB_FILE = os.environ.get(
+    "CLEYDO_DB_FILE",
+    "cleydo.db",
+)
 
 
 def connect():
-    db = sqlite3.connect(DB_FILE)
+    db = sqlite3.connect(
+        DB_FILE,
+        timeout=15,
+    )
 
-    db.execute("""
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
             wallet INTEGER NOT NULL DEFAULT 0,
             bank INTEGER NOT NULL DEFAULT 0,
             last_daily INTEGER NOT NULL DEFAULT 0
         )
-    """)
+        """
+    )
 
     db.commit()
+
     return db
 
+
+# =========================================================
+# USER
+# =========================================================
 
 def ensure_user(user_id):
     user_id = str(user_id)
 
     db = connect()
-    cursor = db.cursor()
 
-    cursor.execute(
-        "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
-        (user_id,)
-    )
+    try:
+        db.execute(
+            """
+            INSERT OR IGNORE INTO users (
+                user_id
+            )
+            VALUES (?)
+            """,
+            (user_id,),
+        )
 
-    db.commit()
-    db.close()
+        db.commit()
+
+    finally:
+        db.close()
 
 
-# =========================
+# =========================================================
 # BALANCE
-# =========================
+# =========================================================
 
 def get_balance(user_id):
+    user_id = str(user_id)
+
     ensure_user(user_id)
 
     db = connect()
-    cursor = db.cursor()
 
-    cursor.execute(
-        "SELECT wallet, bank FROM users WHERE user_id = ?",
-        (str(user_id),)
-    )
+    try:
+        cursor = db.cursor()
 
-    result = cursor.fetchone()
-    db.close()
+        cursor.execute(
+            """
+            SELECT wallet, bank
+            FROM users
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
 
-    if result is None:
-        return 0, 0
+        result = cursor.fetchone()
 
-    return result[0], result[1]
+        if result is None:
+            return 0, 0
+
+        return (
+            int(result[0]),
+            int(result[1]),
+        )
+
+    finally:
+        db.close()
 
 
-# =========================
+# =========================================================
 # ADD MONEY
-# =========================
+# =========================================================
 
-def add_money(user_id, amount):
+def add_money(
+    user_id,
+    amount,
+):
+    try:
+        amount = int(amount)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+    if amount <= 0:
+        return False
+
+    user_id = str(user_id)
+
     ensure_user(user_id)
 
     db = connect()
 
-    db.execute(
-        "UPDATE users SET wallet = wallet + ? WHERE user_id = ?",
-        (amount, str(user_id))
+    try:
+        db.execute(
+            """
+            UPDATE users
+            SET wallet = wallet + ?
+            WHERE user_id = ?
+            """,
+            (
+                amount,
+                user_id,
+            ),
+        )
+
+        db.commit()
+
+        return True
+
+    finally:
+        db.close()
+
+
+# =========================================================
+# REMOVE MONEY
+# =========================================================
+
+def remove_money(
+    user_id,
+    amount,
+):
+    try:
+        amount = int(amount)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+    if amount <= 0:
+        return False
+
+    user_id = str(user_id)
+
+    wallet, bank = get_balance(
+        user_id
     )
 
-    db.commit()
-    db.close()
+    if wallet + bank < amount:
+        return False
+
+    wallet_remove = min(
+        wallet,
+        amount,
+    )
+
+    bank_remove = (
+        amount
+        - wallet_remove
+    )
+
+    db = connect()
+
+    try:
+        db.execute(
+            """
+            UPDATE users
+            SET wallet = wallet - ?,
+                bank = bank - ?
+            WHERE user_id = ?
+            """,
+            (
+                wallet_remove,
+                bank_remove,
+                user_id,
+            ),
+        )
+
+        db.commit()
+
+        return True
+
+    finally:
+        db.close()
 
 
-# =========================
+# =========================================================
 # DEPOSIT
-# =========================
+# =========================================================
 
-def deposit(user_id, amount):
+def deposit(
+    user_id,
+    amount,
+):
+    try:
+        amount = int(amount)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return (
+            "❌ Amount must be a valid number."
+        )
+
     if amount <= 0:
-        return "❌ Amount must be greater than 0."
+        return (
+            "❌ Amount must be greater than 0."
+        )
 
-    wallet, bank = get_balance(user_id)
+    wallet, bank = get_balance(
+        user_id
+    )
 
     if wallet < amount:
-        return "❌ You don't have enough coins in your wallet."
+        return (
+            "❌ You don't have enough "
+            "coins in your wallet."
+        )
+
+    user_id = str(user_id)
 
     db = connect()
 
-    db.execute("""
-        UPDATE users
-        SET wallet = wallet - ?,
-            bank = bank + ?
-        WHERE user_id = ?
-    """, (amount, amount, str(user_id)))
+    try:
+        db.execute(
+            """
+            UPDATE users
+            SET wallet = wallet - ?,
+                bank = bank + ?
+            WHERE user_id = ?
+            """,
+            (
+                amount,
+                amount,
+                user_id,
+            ),
+        )
 
-    db.commit()
-    db.close()
+        db.commit()
+
+    finally:
+        db.close()
 
     return (
-        f"🏦 Deposited **{amount:,} coins**.\n\n"
-        f"👛 Wallet: {wallet - amount:,}\n"
-        f"🏦 Bank: {bank + amount:,}"
+        "╭────────────────╮\n"
+        "      🏦 DEPOSIT\n"
+        "╰────────────────╯\n\n"
+        f"💰 Deposited: **{amount:,}**\n\n"
+        f"👛 Wallet: **{wallet - amount:,}**\n"
+        f"🏦 Bank: **{bank + amount:,}**"
     )
 
 
-# =========================
+# =========================================================
 # WITHDRAW
-# =========================
+# =========================================================
 
-def withdraw(user_id, amount):
+def withdraw(
+    user_id,
+    amount,
+):
+    try:
+        amount = int(amount)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return (
+            "❌ Amount must be a valid number."
+        )
+
     if amount <= 0:
-        return "❌ Amount must be greater than 0."
+        return (
+            "❌ Amount must be greater than 0."
+        )
 
-    wallet, bank = get_balance(user_id)
+    wallet, bank = get_balance(
+        user_id
+    )
 
     if bank < amount:
-        return "❌ You don't have enough coins in your bank."
+        return (
+            "❌ You don't have enough "
+            "coins in your bank."
+        )
+
+    user_id = str(user_id)
 
     db = connect()
 
-    db.execute("""
-        UPDATE users
-        SET wallet = wallet + ?,
-            bank = bank - ?
-        WHERE user_id = ?
-    """, (amount, amount, str(user_id)))
+    try:
+        db.execute(
+            """
+            UPDATE users
+            SET wallet = wallet + ?,
+                bank = bank - ?
+            WHERE user_id = ?
+            """,
+            (
+                amount,
+                amount,
+                user_id,
+            ),
+        )
 
-    db.commit()
-    db.close()
+        db.commit()
+
+    finally:
+        db.close()
 
     return (
-        f"💵 Withdrew **{amount:,} coins**.\n\n"
-        f"👛 Wallet: {wallet + amount:,}\n"
-        f"🏦 Bank: {bank - amount:,}"
+        "╭────────────────╮\n"
+        "     💵 WITHDRAW\n"
+        "╰────────────────╯\n\n"
+        f"💰 Withdrew: **{amount:,}**\n\n"
+        f"👛 Wallet: **{wallet + amount:,}**\n"
+        f"🏦 Bank: **{bank - amount:,}**"
     )
 
 
-# =========================
+# =========================================================
 # DAILY
-# =========================
+# =========================================================
 
 DAILY_AMOUNT = 500
 DAILY_COOLDOWN = 24 * 60 * 60
 
 
 def daily(user_id):
+    user_id = str(user_id)
+
     ensure_user(user_id)
 
     db = connect()
-    cursor = db.cursor()
 
-    cursor.execute(
-        "SELECT last_daily FROM users WHERE user_id = ?",
-        (str(user_id),)
-    )
+    try:
+        cursor = db.cursor()
 
-    result = cursor.fetchone()
-    last_daily = result[0] if result else 0
-
-    now = int(time.time())
-    remaining = DAILY_COOLDOWN - (now - last_daily)
-
-    if remaining > 0:
-        hours = remaining // 3600
-        minutes = (remaining % 3600) // 60
-
-        return (
-            "🎁 You already claimed your daily reward!\n"
-            f"⏰ Try again in {hours}h {minutes}m."
+        cursor.execute(
+            """
+            SELECT last_daily
+            FROM users
+            WHERE user_id = ?
+            """,
+            (user_id,),
         )
 
-    cursor.execute("""
-        UPDATE users
-        SET wallet = wallet + ?,
-            last_daily = ?
-        WHERE user_id = ?
-    """, (DAILY_AMOUNT, now, str(user_id)))
+        result = cursor.fetchone()
 
-    db.commit()
-    db.close()
+        last_daily = (
+            int(result[0])
+            if result
+            else 0
+        )
+
+        now = int(
+            time.time()
+        )
+
+        remaining = (
+            DAILY_COOLDOWN
+            - (
+                now
+                - last_daily
+            )
+        )
+
+        if remaining > 0:
+            hours = (
+                remaining
+                // 3600
+            )
+
+            minutes = (
+                remaining
+                % 3600
+            ) // 60
+
+            return (
+                "╭────────────────╮\n"
+                "       🎁 DAILY\n"
+                "╰────────────────╯\n\n"
+                "❌ Already claimed!\n\n"
+                f"⏰ Try again in "
+                f"**{hours}h {minutes}m**."
+            )
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET wallet = wallet + ?,
+                last_daily = ?
+            WHERE user_id = ?
+            """,
+            (
+                DAILY_AMOUNT,
+                now,
+                user_id,
+            ),
+        )
+
+        db.commit()
+
+    finally:
+        db.close()
 
     return (
-        "🎁 DAILY REWARD!\n\n"
-        f"💰 You received **{DAILY_AMOUNT:,} coins**!"
+        "╭────────────────╮\n"
+        "   🎁 DAILY REWARD\n"
+        "╰────────────────╯\n\n"
+        f"💰 **+{DAILY_AMOUNT:,} coins**\n\n"
+        "Come back tomorrow! 🐈‍⬛"
     )
 
 
-# =========================
-# ADMIN SYSTEM
-# =========================
+# =========================================================
+# ADMIN
+# =========================================================
 
 ADMINS = {
-    "https://www.facebook.com/share/1Zb1n5SYo6/"
+    admin_id.strip()
+    for admin_id in os.environ.get(
+        "ADMIN_IDS",
+        "",
+    ).split(",")
+    if admin_id.strip()
 }
 
 
@@ -209,59 +454,86 @@ def is_admin(user_id):
     return str(user_id) in ADMINS
 
 
-# =========================
-# ADMIN ADD MONEY
-# =========================
-
-def admin_add_money(admin_id, target_id, amount):
+def admin_add_money(
+    admin_id,
+    target_id,
+    amount,
+):
     if not is_admin(admin_id):
-        return "❌ You don't have permission to use this command."
+        return (
+            "❌ You don't have permission."
+        )
+
+    try:
+        amount = int(amount)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return (
+            "❌ Amount must be a valid number."
+        )
 
     if amount <= 0:
-        return "❌ Amount must be greater than 0."
+        return (
+            "❌ Amount must be greater than 0."
+        )
 
-    add_money(target_id, amount)
+    if not add_money(
+        target_id,
+        amount,
+    ):
+        return (
+            "❌ Failed to add coins."
+        )
 
     return (
-        f"👑 Added **{amount:,} coins** to {target_id}."
+        "╭────────────────╮\n"
+        "    👑 ADMIN MONEY\n"
+        "╰────────────────╯\n\n"
+        f"💰 Added: **{amount:,}**\n"
+        f"👤 User: `{target_id}`"
     )
 
 
-# =========================
-# ADMIN REMOVE MONEY
-# =========================
-
-def admin_remove_money(admin_id, target_id, amount):
+def admin_remove_money(
+    admin_id,
+    target_id,
+    amount,
+):
     if not is_admin(admin_id):
-        return "❌ You don't have permission to use this command."
+        return (
+            "❌ You don't have permission."
+        )
+
+    try:
+        amount = int(amount)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return (
+            "❌ Amount must be a valid number."
+        )
 
     if amount <= 0:
-        return "❌ Amount must be greater than 0."
+        return (
+            "❌ Amount must be greater than 0."
+        )
 
-    wallet, bank = get_balance(target_id)
-
-    if wallet + bank < amount:
-        return "❌ That user doesn't have enough money."
-
-    wallet_remove = min(wallet, amount)
-    remaining = amount - wallet_remove
-
-    db = connect()
-
-    db.execute("""
-        UPDATE users
-        SET wallet = wallet - ?,
-            bank = bank - ?
-        WHERE user_id = ?
-    """, (
-        wallet_remove,
-        remaining,
-        str(target_id)
-    ))
-
-    db.commit()
-    db.close()
+    if not remove_money(
+        target_id,
+        amount,
+    ):
+        return (
+            "❌ That user doesn't have "
+            "enough money."
+        )
 
     return (
-        f"👑 Removed **{amount:,} coins** from {target_id}."
+        "╭────────────────╮\n"
+        "    👑 ADMIN MONEY\n"
+        "╰────────────────╯\n\n"
+        f"💰 Removed: **{amount:,}**\n"
+        f"👤 User: `{target_id}`"
     )
